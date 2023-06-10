@@ -2654,7 +2654,7 @@ void processConfigureCommand(const char* cmd)
             Serial.println(F("Out of range."));
         }
     }
-    else if (startswith_P(cmd, F("#DPPWDEADBAND")) && isdigit(*cmd))
+    else if (startswith_P(cmd, F("#DPPWMDEADBAND")) && isdigit(*cmd))
     {
         uint32_t pulse = strtolu(cmd, &cmd);
         if (pulse <= PWM_MAX_DEADBAND) {
