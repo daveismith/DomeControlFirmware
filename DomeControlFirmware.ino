@@ -141,7 +141,7 @@
 // If false automatic movement can happen on startup.
 #define DEFAULT_AUTO_SAFETY             true
 #define DEFAULT_AUTO_RESTART            true
-#define DEFAULT_INVERTED                false
+#define DEFAULT_INVERTED                true
 #define DEFAULT_PWM_MIN_PULSE           1000
 #define DEFAULT_PWM_MAX_PULSE           2000
 #define DEFAULT_PWM_NEUTRAL_PULSE       1500
@@ -944,9 +944,10 @@ EEPROMSettings<DomeControllerSettings> sSettings;
 
 ///////////////////////////////////////////////////////////////////////////////
 
-#ifdef PWM_INPUT_PIN
 #define PWM_MIN_PULSE 800
 #define PWM_MAX_PULSE 2200
+#define PWM_MAX_DEADBAND 50 /* percentage */
+#ifdef PWM_INPUT_PIN
 ServoDecoder pulseInput([](int pin, uint16_t pulse) {
     float drive = 0;
     long min_pulse = sSettings.fPWMMinPulse;
@@ -961,28 +962,31 @@ ServoDecoder pulseInput([](int pin, uint16_t pulse) {
             pulse = max_pulse;
         if (pulse < neutral_pulse)
         {
-            drive = -float(neutral_pulse - pulse) / (neutral_pulse - min_pulse);
+            drive = float(neutral_pulse - pulse) / (neutral_pulse - min_pulse);
         }
         else
         {
-            drive = float(pulse - neutral_pulse) / (max_pulse - neutral_pulse);
+            drive = -float(pulse - neutral_pulse) / (max_pulse - neutral_pulse);
         }
+        bool outsideDeadband = true;
         if (float(deadband)/100 >= abs(drive))
         {
+            outsideDeadband = false;
             drive = 0;
-        }
-        else if (!sDomeHasMovedManually)
-        {
-            sDomeHasMovedManually = true;
-            restoreDomeSettings();
         }
         if (sVerboseDomeDebug)
             printf("PWM: %d (pulse: %d [%d:%d:%d])\n", int(drive * 100), pulse, int(min_pulse), int(max_pulse), int(neutral_pulse));
-        if (sSettings.fPWMInput)
+
+        if (outsideDeadband)
         {
+            if (!sDomeHasMovedManually)
+            {
+                sDomeHasMovedManually = true;
+                restoreDomeSettings();
+            }
             abortSerialCommand();
-            sDomeDrive.driveDome(drive);
         }
+        sDomeDrive.driveDome(drive);
     }
     else
     {
@@ -2626,17 +2630,38 @@ void processConfigureCommand(const char* cmd)
     else if (startswith_P(cmd, F("#DPPWMMIN")) && isdigit(*cmd))
     {
         uint32_t pulse = strtolu(cmd, &cmd);
-        UPDATE_SETTING(sSettings.fPWMMinPulse, pulse);
+        if (pulse > PWM_MIN_PULSE && pulse < PWM_MAX_PULSE) {
+            UPDATE_SETTING(sSettings.fPWMMinPulse, pulse);
+        } else {
+            Serial.println(F("Out of range."));
+        }
     }
     else if (startswith_P(cmd, F("#DPPWMMAX")) && isdigit(*cmd))
     {
         uint32_t pulse = strtolu(cmd, &cmd);
-        UPDATE_SETTING(sSettings.fPWMMaxPulse, pulse);
+        if (pulse > PWM_MIN_PULSE && pulse < PWM_MAX_PULSE) {
+            UPDATE_SETTING(sSettings.fPWMMaxPulse, pulse);
+        } else {
+            Serial.println(F("Out of range."));
+        }
     }
     else if (startswith_P(cmd, F("#DPPWMNEUTRAL")) && isdigit(*cmd))
     {
         uint32_t pulse = strtolu(cmd, &cmd);
-        UPDATE_SETTING(sSettings.fPWMNeutralPulse, pulse);
+        if (pulse > PWM_MIN_PULSE && pulse < PWM_MAX_PULSE) {
+            UPDATE_SETTING(sSettings.fPWMNeutralPulse, pulse);
+        } else {
+            Serial.println(F("Out of range."));
+        }
+    }
+    else if (startswith_P(cmd, F("#DPPWDEADBAND")) && isdigit(*cmd))
+    {
+        uint32_t pulse = strtolu(cmd, &cmd);
+        if (pulse <= PWM_MAX_DEADBAND) {
+            UPDATE_SETTING(sSettings.fPWMDeadbandPercent, pulse);
+        } else {
+            Serial.println(F("Out of range."));
+        }
     }
     else if (startswith_P(cmd, F("#DPSERIALOUT")) && isdigit(*cmd))
     {

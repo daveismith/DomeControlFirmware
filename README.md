@@ -343,6 +343,33 @@ Enable/disable PWM output 0 or 1 (default disabled 0)
     #DPPWMOUT0 (disable PWM output)
     #DPPWMOUT1 (enable PWM output)
 
+`#DPPWMMIN`[number]:
+Set minimum PWM input value (800-2200)
+*Examples*:
+
+    #DPPWMMIN800  (sets minimum PWM input to 800)
+    #DPPWMMIN1000 (sets minimum PWM input to 1000)
+
+`#DPPWMMAX`[number]:
+Set maximum PWM input value (800-2200)
+*Examples*:
+
+    #DPPWMMAX800  (sets maximum PWM input to 800)
+    #DPPWMMAX1000 (sets maximum PWM input to 1000)
+
+`#DPPWMNEUTRAL`[number]:
+Set neutral PWM input value (800-2200)
+*Examples*:
+
+    #DPPWMNEUTRAL1500  (sets neutral PWM input to 1500)
+
+`#DPPWDEADBAND`[number]:
+Set deadband percentage PWM input value (0-50). Default value is 5.
+*Examples*:
+
+    #DPPWDEADBAND5  (sets deadband percentage PWM input to 5)
+    #DPPWDEADBAND6  (sets deadband percentage PWM input to 6)
+
 `#DPSERIALBAUD`[number]:
 Specify command serial baud rate 2400,9600,19200,384000 (default 9600)
 *Examples*:
