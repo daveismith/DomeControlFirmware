@@ -130,6 +130,7 @@
 #define DEFAULT_SERIAL_BAUD             9600
 #define DEFAULT_PACKET_SERIAL_INPUT     true
 #define DEFAULT_PACKET_SERIAL_OUTPUT    true
+#define DEFAULT_PWM_ARC_MODE            false
 #define DEFAULT_PWM_INPUT               false
 #define DEFAULT_PWM_OUTPUT              false
 #define DEFAULT_INPUT_SPEED             100
@@ -248,7 +249,7 @@
 #include "drive/DomeSensorRingSerialListener.h"
 #include "drive/DomeDriveSabertooth.h"
 #endif
-#ifdef PWM_INPUT_PIN
+#if defined(PWM_INPUT_PIN) || defined(PPMIN_RC_PIN)
 #ifdef ESP32
  #include "encoder/PWMDecoder.h"
 #else
@@ -338,8 +339,9 @@ static const lv_font_t* font_normal = &lv_font_montserrat_32;
 
 ///////////////////////////////////
 
-// STATUSLED cannot support PWM INPUT until Adafruit_NeoPixel is fixed or replaced
-#undef STATUSLED_PIN
+static void PulseInputBegin();
+static void PulseInputEnd();
+
 #ifdef STATUSLED_PIN
 #include "core/SingleStatusLED.h"
 
@@ -360,7 +362,24 @@ static constexpr uint8_t kStatusColors[][4][3] = {
       { {  0,   0,   10} , {  10,    0,    0} , {  0,   0,   10} , {  10,    0,    0}  },  // blue,red,blue,red
       { {  0,  10,   10} , {  10,    0,    0} , {  0,  10,   10} , {  10,    0,    0}  }   // yellow,red,yellow,red
 };
-typedef SingleStatusLED<STATUSLED_PIN> StatusLED;
+class StatusLED: public SingleStatusLED<STATUSLED_PIN> {
+public:
+    StatusLED()
+    {
+    }
+
+    StatusLED(const uint8_t (*colors)[4][3], unsigned numModes = 1) :
+        SingleStatusLED<STATUSLED_PIN>(colors, numModes)
+    {
+    }
+
+    virtual void show() override
+    {
+        PulseInputEnd();
+        SingleStatusLED<STATUSLED_PIN>::show();
+        PulseInputBegin();
+    }
+};
 StatusLED statusLED(kStatusColors, SizeOfArray(kStatusColors));
 #endif
 
@@ -894,6 +913,7 @@ struct DomeControllerSettings
     bool fPacketSerialInput = DEFAULT_PACKET_SERIAL_INPUT;
     bool fPacketSerialOutput = DEFAULT_PACKET_SERIAL_OUTPUT;
     bool fPWMInput = DEFAULT_PWM_INPUT;
+    bool fPWMArcMode = DEFAULT_PWM_ARC_MODE;
     bool fPWMOutput = DEFAULT_PWM_OUTPUT;
     uint8_t fMaxSpeed = DEFAULT_MAX_SPEED;
     uint8_t fInputSpeed = DEFAULT_INPUT_SPEED;
@@ -944,6 +964,21 @@ EEPROMSettings<DomeControllerSettings> sSettings;
 
 ///////////////////////////////////////////////////////////////////////////////
 
+double mapToHalfCircleDegrees(int inputValue) {
+    double degree;
+    if (inputValue >= 1000 && inputValue <= 1500) {
+        // Mapping [1000, 1500] to [90, 0] degrees
+        degree = 90 - ((inputValue - 1000) * (90.0 / 500.0));
+    } else if (inputValue > 1500 && inputValue <= 2000) {
+        // Mapping [1500, 2000] to [360, 270] degrees
+        degree = 360 - ((inputValue - 1500) * (90.0 / 500.0));
+    } else {
+        // Input value out of range
+        degree = -1; // Indicates error/invalid input
+    }
+    return degree;
+}
+
 #define PWM_MIN_PULSE 800
 #define PWM_MAX_PULSE 2200
 #define PWM_MAX_DEADBAND 50 /* percentage */
@@ -954,6 +989,7 @@ ServoDecoder pulseInput([](int pin, uint16_t pulse) {
     long neutral_pulse = sSettings.fPWMNeutralPulse;
     long max_pulse = sSettings.fPWMMaxPulse;
     uint8_t deadband = sSettings.fPWMDeadbandPercent;
+    printf("pulse: %d\n", pulse);
     if (pulse > PWM_MIN_PULSE && pulse < PWM_MAX_PULSE)
     {
         if (pulse < min_pulse)
@@ -974,26 +1010,111 @@ ServoDecoder pulseInput([](int pin, uint16_t pulse) {
             outsideDeadband = false;
             drive = 0;
         }
-        if (sVerboseDomeDebug)
-            printf("PWM: %d (pulse: %d [%d:%d:%d])\n", int(drive * 100), pulse, int(min_pulse), int(max_pulse), int(neutral_pulse));
+        if (sSettings.fPWMArcMode) {
+            if (outsideDeadband) {
+                if (!sDomeHasMovedManually)
+                {
+                    sDomeHasMovedManually = true;
+                    restoreDomeSettings();
+                }
+                int degrees = mapToHalfCircleDegrees(pulse);
+                if (sVerboseDomeDebug)
+                    printf("PWM: %d (pulse: %d [%d:%d:%d]) DEGREES: %d\n", int(drive * 100), pulse, int(min_pulse), int(max_pulse), int(neutral_pulse), degrees);
 
-        if (outsideDeadband)
-        {
-            if (!sDomeHasMovedManually)
-            {
-                sDomeHasMovedManually = true;
-                restoreDomeSettings();
+                char buf[10];
+                snprintf(buf, sizeof(buf), "A%d+", degrees);
+                processDomePositionCommand(buf);
             }
-            abortSerialCommand();
+        } else {
+            if (sVerboseDomeDebug)
+                printf("PWM: %d (pulse: %d [%d:%d:%d])\n", int(drive * 100), pulse, int(min_pulse), int(max_pulse), int(neutral_pulse));
+            if (outsideDeadband)
+            {
+                if (!sDomeHasMovedManually)
+                {
+                    sDomeHasMovedManually = true;
+                    restoreDomeSettings();
+                }
+                abortSerialCommand();
+            }
+            sDomeDrive.driveDome(drive);
         }
-        sDomeDrive.driveDome(drive);
     }
     else
     {
-        DEBUG_PRINTLN("BAD PULSE");
+        // DEBUG_PRINTLN("BAD PULSE");
     }
 }, PWM_INPUT_PIN);
 #endif
+
+#ifdef PPMIN_RC_PIN
+static DomePosition::Mode sLastPulseDomeMode = DomePosition::kTarget;
+ServoDecoder pulseModeInput([](int pin, uint16_t pulse) {
+    float value = 0;
+    long min_pulse = sSettings.fPWMMinPulse;
+    long neutral_pulse = sSettings.fPWMNeutralPulse;
+    long max_pulse = sSettings.fPWMMaxPulse;
+    // We set the pulse mode input to invalid state 'kTarget'
+    if (pulse > PWM_MIN_PULSE && pulse < PWM_MAX_PULSE)
+    {
+        if (pulse < min_pulse)
+            pulse = min_pulse;
+        else if (pulse > max_pulse)
+            pulse = max_pulse;
+        if (pulse < neutral_pulse)
+        {
+            value = float(neutral_pulse - pulse) / (neutral_pulse - min_pulse);
+        }
+        else
+        {
+            value = -float(pulse - neutral_pulse) / (max_pulse - neutral_pulse);
+        }
+        DomePosition::Mode domeMode = (value <= -0.5) ?
+            DomePosition::kRandom : (value <= 0.5) ? DomePosition::kOff : DomePosition::kHome;
+        if (domeMode != sLastPulseDomeMode || domeMode != sDomePosition.getDomeDefaultMode())
+        {
+            if (sVerboseDomeDebug)
+            {
+                printf("PWM Dome Mode: %s\n",
+                    (domeMode == DomePosition::kRandom) ? "Random" :
+                        (domeMode == DomePosition::kHome) ? "Home" : "Off");
+            }
+            sDomePosition.setDomeDefaultMode(domeMode);
+            sDomePosition.setDomeMode(domeMode);
+            sLastPulseDomeMode = domeMode;
+        }
+    }
+    else
+    {
+        // DEBUG_PRINTLN("BAD PULSE");
+        sLastPulseDomeMode = DomePosition::kTarget;
+    }
+}, PPMIN_RC_PIN);
+#endif
+
+void PulseInputBegin()
+{
+#ifdef PWM_INPUT_PIN
+    if (sSettings.fPWMInput) {
+        pulseInput.begin();
+    }
+#endif
+#ifdef PPMIN_RC_PIN
+    if (sSettings.fPWMInput) {
+        pulseModeInput.begin();
+    }
+#endif
+}
+
+void PulseInputEnd()
+{
+#ifdef PPMIN_RC_PIN
+    pulseModeInput.end();
+#endif
+#ifdef PWM_INPUT_PIN
+    pulseInput.end();
+#endif
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 
@@ -1084,14 +1205,14 @@ static void restoreDomeSettings()
         setDigitalPin(i+1, pins & 1);
         pins >>= 1;
     }
-#if defined(ESP32) && defined(PWM_INPUT_PIN)
+#if defined(ESP32)
     if (sSettings.fPWMInput)
     {
-        pulseInput.begin();
+        PulseInputBegin();
     }
     else
     {
-        // pulseInput.end();
+        // PulseInputBegin();
     }
 #endif
 
@@ -1854,7 +1975,6 @@ bool processDomePositionCommand(const char* cmd)
             {
                 degrees = strtol(cmd, &cmd);
             }
-            printf("cmd: %s\n", cmd);
             if (*cmd == ',')
             {
                 uint32_t speedpercentage;
@@ -2183,9 +2303,7 @@ void reboot()
  #ifdef USE_DROID_REMOTE
     DisconnectRemote();
 #endif
-#ifdef PWM_INPUT_PIN
-    pulseInput.end();
-#endif
+    PulseInputEnd();
     unmountFileSystems();
 #ifdef USE_PREFERENCES
     preferences.end();
@@ -2351,6 +2469,12 @@ void processConfigureCommand(const char* cmd)
             Serial.println(F("Pulse Input Active"));
         }
     #endif
+    #ifdef PPMIN_RC_PIN
+        if (pulseModeInput.isActive())
+        {
+            Serial.println(F("Pulse Mode Input Active"));
+        }
+    #endif
         if (sSerialMotorActivity)
         {
             Serial.println(F("Receiving Packet Serial"));
@@ -2429,6 +2553,7 @@ void processConfigureCommand(const char* cmd)
         Serial.print(F("PWMMaxPulse=")); Serial.println(sSettings.fPWMMaxPulse);
         Serial.print(F("PWMNeutralPulse=")); Serial.println(sSettings.fPWMNeutralPulse);
         Serial.print(F("PWMDeadband=")); Serial.println(sSettings.fPWMDeadbandPercent);
+        Serial.print(F("PWMArcMode=")); Serial.println(sSettings.fPWMArcMode);
         Serial.print(F("DOut="));
         // Write out the pins backwards (pin1 first)
         uint8_t pins = sSettings.fDigitalPins;
@@ -2616,6 +2741,11 @@ void processConfigureCommand(const char* cmd)
     {
         uint32_t mode = strtolu(cmd, &cmd);
         UPDATE_SETTING(sSettings.fPacketSerialInput, (mode != 0));
+    }
+    else if (startswith_P(cmd, F("#DPPWMARC")) && isdigit(*cmd))
+    {
+        uint32_t mode = strtolu(cmd, &cmd);
+        UPDATE_SETTING(sSettings.fPWMArcMode, (mode != 0));
     }
     else if (startswith_P(cmd, F("#DPPWMIN")) && isdigit(*cmd))
     {
@@ -3404,6 +3534,21 @@ void mainLoop()
         #ifdef STATUSLED_PIN
             statusLED.setMode(sCurrentMode + 3);
         #endif
+        }
+    }
+#endif
+#ifdef PPMIN_RC_PIN
+    if (sSettings.fPWMInput)
+    {
+        if (pulseModeInput.becameInactive())
+        {
+            Serial.println(F("No PWM Mode Input"));
+            sLastPulseDomeMode = DomePosition::kTarget;
+            restoreDomeSettings();
+        }
+        else if (pulseModeInput.becameActive())
+        {
+            Serial.println(F("PWM Mode Input Active"));
         }
     }
 #endif

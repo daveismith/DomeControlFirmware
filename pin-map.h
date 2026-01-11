@@ -92,6 +92,8 @@
 #define PIN_TOUCH_INT           16
 #define PIN_TOUCH_RES           21
 
+#define PPMIN_RC_PIN            21   // PPM RC Input Pin
+
 #elif defined(ROAM_A_DOME_COMPACT_PCB)
 
 #define PWM_INPUT_PIN           19   // PWM Input Pin (Stealth or other PWM based dome control)

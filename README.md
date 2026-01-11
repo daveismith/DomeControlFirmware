@@ -363,12 +363,12 @@ Set neutral PWM input value (800-2200)
 
     #DPPWMNEUTRAL1500  (sets neutral PWM input to 1500)
 
-`#DPPWDEADBAND`[number]:
+`#DPPWMDEADBAND`[number]:
 Set deadband percentage PWM input value (0-50). Default value is 5.
 *Examples*:
 
-    #DPPWDEADBAND5  (sets deadband percentage PWM input to 5)
-    #DPPWDEADBAND6  (sets deadband percentage PWM input to 6)
+    #DPPWMDEADBAND5  (sets deadband percentage PWM input to 5)
+    #DPPWMDEADBAND6  (sets deadband percentage PWM input to 6)
 
 `#DPSERIALBAUD`[number]:
 Specify command serial baud rate 2400,9600,19200,384000 (default 9600)
