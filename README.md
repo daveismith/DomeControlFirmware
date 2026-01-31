@@ -159,6 +159,13 @@ Reboot the controller.
 
     #DPRESTART
 
+`#DPREPORT`:
+Configure reporting of dome position at a regular interval.
+*Examples*:
+
+    #DPREPORT100 (set a report to be generated every 100ms)
+    #DPREPORT0 (disable scheudled dome position reporting)
+
 `#DPL`:
 List all stored sequences
 *Examples*:

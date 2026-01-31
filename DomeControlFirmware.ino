@@ -1480,7 +1480,7 @@ void setup()
         sPinManager.pinMode(sDigitalPin[i], OUTPUT);
     }
     sPinManager.begin();
-
+    
 #ifdef USE_LCD_SCREEN
     Wire.begin();
 #ifndef ESP32
@@ -1813,6 +1813,8 @@ static uint32_t sWaitNextSerialCommand;
 static char sBuffer[CONSOLE_BUFFER_SIZE];
 static bool sCmdNextCommand;
 static char sCmdBuffer[COMMAND_BUFFER_SIZE];
+static uint32_t sPositionReportNext;
+static uint16_t sPositionReport;
 
 static void runSerialCommand()
 {
@@ -2343,6 +2345,23 @@ void processConfigureCommand(const char* cmd)
     else if (startswith_P(cmd, F("#DPRESTART")))
     {
         reboot();
+    }
+    else if (startswith_P(cmd, F("#DPREPORT")))
+    {
+        uint16_t reportSetting = strtolu(cmd, &cmd);
+        if (sPositionReport != reportSetting)
+        {
+            if (reportSetting > 0)
+            {
+                Serial.println(F("Position Reporting Enabled"));
+                sPositionReportNext = millis();
+            }
+            else
+            {
+                Serial.println(F("Position Reporting Disabled"));
+            }
+            sPositionReport = reportSetting;
+        }
     }
 #if defined(USE_VERBOSE_DOME_DEBUG) && !defined(__AVR__)
     else if (startswith_P(cmd, F("#DPDEBUG")) && isdigit(*cmd))
@@ -3247,6 +3266,15 @@ void mainLoop()
     }
   #endif
 #endif
+
+    if (sPositionReport > 0 && millis() >= sPositionReportNext)
+    {
+        int pos = sDomePosition.getHomeRelativeDomePosition();
+        Serial.print(F("DOME POSITION: "));
+        Serial.println(pos);
+        sPositionReportNext = millis() + sPositionReport;
+    }
+
     // append commands to command buffer
     if (!sDomeStick.isEmulationActive() && Serial.available())
     {
